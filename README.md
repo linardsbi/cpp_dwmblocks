@@ -1,6 +1,6 @@
-# dwmblocks
+# cpp dwmblocks
 
-Modular status bar for dwm written in c.
+Modular status bar for dwm written in c, modified to work in c++ and to conform with (some of) its standards.
 
 # Modifying blocks
 

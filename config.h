@@ -30,7 +30,7 @@ static constexpr std::array blocks = {
 };
 
 //Sets delimiter between status commands. NULL character ('\0') means no delimiter.
-static std::string_view delim = " ";
+static std::string_view delimiter = " ";
 
 // Have dwmblocks automatically recompile and run when you edit this file in
 // vim with the following line in your vimrc/init.vim:

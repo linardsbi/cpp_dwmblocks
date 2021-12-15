@@ -2,7 +2,7 @@
 
 PREFIX = /usr/local
 CC = g++
-CFLAGS = -std=c++23 -O3 -Wall -Wextra -Wpedantic
+CFLAGS = -std=c++23 -O3 -Wall -Wextra -Wpedantic -funroll-loops -flto
 LIBS = -lX11 `pkg-config --libs fmt`
 
 dwmblocks: dwmblocks.o

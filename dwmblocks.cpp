@@ -10,6 +10,8 @@
 #include <fmt/printf.h>
 #include <atomic>
 #include <ranges>
+#include <algorithm>
+#include <numeric>
 
 #define CMDLENGTH        50
 
@@ -26,8 +28,6 @@ void buttonhandler(int sig, siginfo_t *si, void *ucontext);
 
 [[maybe_unused]] void replace(char *str, char old, char newc);
 
-void remove_all(char *str, char to_remove);
-
 void getcmds(int time);
 
 #ifndef __OpenBSD__
@@ -38,8 +38,6 @@ void setupsignals();
 
 #endif
 
-int getstatus(char *str, char *last);
-
 void setroot();
 
 void statusloop();
@@ -48,33 +46,21 @@ void termhandler(int signum);
 
 #include "config.h"
 
-static Display *dpy;
-static int screen;
-static Window root;
-static char statusbar[blocks.size()][CMDLENGTH] = {{0}};
-static char statusstr[2][256];
+Display *dpy = nullptr;
+int screen = 0;
+Window root;
+static std::array<std::string, blocks.size()> statusbar;
 std::atomic<int> statusContinue = 1;
+unsigned changed_blocks = 0;
 
 static void (*writestatus)() = setroot;
 
-[[maybe_unused]] void replace(char *str, char old, char newc) {
-    for (char *c = str; *c; c++)
-        if (*c == old)
-            *c = newc;
+inline void set_as_changed(unsigned index) {
+    changed_blocks |= 1 << index;
 }
 
-// the previous function looked nice but unfortunately it didnt work if to_remove was in any position other than the last character
-// theres probably still a better way of doing this
-void remove_all(char *str, char to_remove) {
-    char *read = str;
-    char *write = str;
-    while (*read) {
-        if (*read != to_remove) {
-            *write++ = *read;
-        }
-        ++read;
-    }
-    *write = '\0';
+inline void strip_newlines(std::string &old) {
+    std::erase_if(old, [](const auto ch) { return ch == '\n'; });
 }
 
 constexpr auto gcd(auto a, auto b) {
@@ -84,11 +70,10 @@ constexpr auto gcd(auto a, auto b) {
     return a;
 }
 
-//opens process *cmd and stores output in *output
-void getcmd(const Block& block, char *output) {
+void write_cmd_output(const Block& block, std::string &output) {
+    output.clear();
     if (block.signal != 0) {
         output[0] = static_cast<char>(block.signal);
-        output++;
     }
 
     auto get_value_from_cmd = [](const char* cmd)-> std::string {
@@ -110,25 +95,21 @@ void getcmd(const Block& block, char *output) {
 
         do {
             errno = 0;
-            status = fgets(tmpstr, CMDLENGTH - (delim.length() + 1), cmdf);
+            status = fgets(tmpstr, CMDLENGTH - (delimiter.length() + 1), cmdf);
         } while (!status && errno == EINTR);
         pclose(cmdf);
 
         return tmpstr;
     };
 
-    const auto new_block_value = get_value_from_cmd(block.command);
+    output += block.icon;
+    output += get_value_from_cmd(block.command);
 
-    auto i = strlen(block.icon);
-    strcpy(output, block.icon);
-    strcpy(output + i, new_block_value.c_str());
-    remove_all(output, '\n');
-    i = strlen(output);
-    if ((i > 0 && &block != &blocks.back())) {
-        strcat(output, delim.data());
+    strip_newlines(output);
+
+    if (output.length() > 0 && &block != &blocks.back()) {
+        output += delimiter;
     }
-    i += delim.length();
-    output[i] = '\0';
 }
 
 void getcmds(int time) {
@@ -138,7 +119,8 @@ void getcmds(int time) {
 
     for (const auto& block : blocks | std::views::filter(updatable)) {
         const auto bar_index = std::distance(blocks.cbegin(), &block);
-        getcmd(block, statusbar[bar_index]);
+        set_as_changed(bar_index);
+        write_cmd_output(block, statusbar[bar_index]);
     }
 }
 
@@ -147,7 +129,7 @@ void getcmds(int time) {
 void getsigcmds(int signal) {
     for (std::size_t i = 0; const auto& block : blocks) {
         if (static_cast<int>(block.signal) == signal) {
-            getcmd(block, statusbar[i]);
+            write_cmd_output(block, statusbar[i]);
         }
         i++;
     }
@@ -181,35 +163,32 @@ void setupsignals() {
 
 #endif
 
-int getstatus(char *str, char *last) {
-    strcpy(last, str);
-    str[0] = '\0';
+inline bool status_has_changed() {
+    return changed_blocks > 0;
+}
 
-    for (auto & i : statusbar) {
-        strcat(str, i);
-    }
-    strcat(str, " ");
-    str[strlen(str) - 1] = '\0';
-    return strcmp(str, last);//0 if they are the same
+inline std::string format_status_bar() {
+    changed_blocks = 0;
+    return fmt::format("{}", fmt::join(statusbar, ""));
 }
 
 void setroot() {
-    if (!getstatus(statusstr[0], statusstr[1]))//Only set root if text has changed.
+    if (!status_has_changed())//Only set root if text has changed.
         return;
-    Display *d = XOpenDisplay(nullptr);
-    if (d) {
+
+    if (auto *d = XOpenDisplay(nullptr)) {
         dpy = d;
     }
     screen = DefaultScreen(dpy);
     root = RootWindow(dpy, screen);
-    XStoreName(dpy, root, statusstr[0]);
+    XStoreName(dpy, root, format_status_bar().c_str());
     XCloseDisplay(dpy);
 }
 
 void pstdout() {
-    if (!getstatus(statusstr[0], statusstr[1]))//Only write out if text has changed.
+    if (!status_has_changed())//Only write out if text has changed.
         return;
-    printf("%s\n", statusstr[0]);
+    fmt::printf("%s\n", format_status_bar());
     fflush(stdout);
 }
 
@@ -254,7 +233,6 @@ void sighandler(int signum) {
     getsigcmds(signum - SIGRTMIN);
     writestatus();
 }
-#include <algorithm>
 
 void buttonhandler(int sig, siginfo_t *si, void *ucontext) {
     (void)ucontext;
@@ -296,7 +274,7 @@ void termhandler(int signum) {
 int main(int argc, char **argv) {
     for (int i = 0; i < argc; i++) {
         if (!strcmp("-d", argv[i]))
-            delim = argv[++i];
+            delimiter = argv[++i];
         else if (!strcmp("-p", argv[i]))
             writestatus = pstdout;
     }

@@ -5,7 +5,7 @@ static constexpr std::array blocks = {
               /*Icon*/    /*Command*/        /*Update Interval*/    /*Update Signal*/
         /* Block{"⌨", "sb-kbselect", 0, 30}, */
         Block{"", "cat /tmp/recordingicon 2>/dev/null", 0, 9},
-        Block{"", "sb-tasks", 10, 26},
+//        Block{"", "sb-tasks", 10, 26},
         Block{"", "sb-music", 0, 11},
         Block{"", "sb-pacpackages", 0, 8},
 //	Block{"",	"sb-news",		0,	6},
@@ -15,7 +15,7 @@ static constexpr std::array blocks = {
         /* Block{"",	"sb-price xmr \"Monero\" 🔒",			9000,	24}, */
         /* Block{"",	"sb-price eth Ethereum 🍸",	9000,	23}, */
         /* Block{"",	"sb-price btc Bitcoin 💰",				9000,	21}, */
-        Block{"", "sb-torrent", 20, 7},
+//        Block{"", "sb-torrent", 20, 7},
         Block{"", "sb-memory", 10, 14},
         Block{"", "sb-cpu", 10, 18},
         /* Block{"",	"sb-moonphase",	18000,	17}, */

@@ -2,7 +2,6 @@
 #include <cstdio>
 #include <cstring>
 #include <unistd.h>
-#include <ctime>
 #include <csignal>
 #include <cerrno>
 #include <X11/Xlib.h>
@@ -12,6 +11,8 @@
 #include <ranges>
 #include <algorithm>
 #include <numeric>
+#include <chrono>
+#include <thread>
 
 #define CMDLENGTH        50
 
@@ -26,8 +27,6 @@ void sighandler(int num);
 
 void buttonhandler(int sig, siginfo_t *si, void *ucontext);
 
-[[maybe_unused]] void replace(char *str, char old, char newc);
-
 void getcmds(int time);
 
 #ifndef __OpenBSD__
@@ -41,8 +40,6 @@ void setupsignals();
 void setroot();
 
 void statusloop();
-
-void termhandler(int signum);
 
 #include "config.h"
 
@@ -71,20 +68,12 @@ constexpr auto gcd(auto a, auto b) {
 }
 
 void write_cmd_output(const Block& block, std::string &output) {
-    output.clear();
-    if (block.signal != 0) {
-        output[0] = static_cast<char>(block.signal);
-    }
-
-    auto get_value_from_cmd = [](const char* cmd)-> std::string {
+    auto get_value_from_cmd = [](const char* cmd)-> std::optional<std::string> {
         FILE *cmdf = popen(cmd, "r");
         if (!cmdf) {
             //printf("failed to run: %s, %d\n", block.command, errno);
             return {};
         }
-
-        char* status;
-        char tmpstr[CMDLENGTH]{};
 
         // TODO decide whether its better to use the last value till next time or just keep trying while the error was the interrupt
         // this keeps trying to read if it got nothing and the error was an interrupt
@@ -93,28 +82,43 @@ void write_cmd_output(const Block& block, std::string &output) {
         //  the other way will move on to keep going with everything and the part that failed to read will be wrong till its updated again
         // either way you have to save the data to a temp buffer because when it fails it writes nothing and then then it gets displayed before this finishes
 
+        char* status;
+        char tmpstr[CMDLENGTH]{};
         do {
             errno = 0;
+            tmpstr[0] = '\0';
             status = fgets(tmpstr, CMDLENGTH - (delimiter.length() + 1), cmdf);
         } while (!status && errno == EINTR);
         pclose(cmdf);
 
-        return tmpstr;
+        if (tmpstr[0] == '\0') {
+            return {};
+        }
+
+        return {tmpstr};
     };
 
-    output += block.icon;
-    output += get_value_from_cmd(block.command);
+    if (const auto value = get_value_from_cmd(block.command)) {
+        output.clear();
 
-    strip_newlines(output);
+        if (block.signal != 0) {
+            output += static_cast<char>(block.signal);
+        }
 
-    if (output.length() > 0 && &block != &blocks.back()) {
-        output += delimiter;
+        output += block.icon;
+        output += value.value();
+
+        strip_newlines(output);
+
+        if (output.length() > 0 && &block != &blocks.back()) {
+            output += delimiter;
+        }
     }
 }
 
-void getcmds(int time) {
+void getcmds(std::uint64_t time = 0) {
     auto updatable = [time](const auto &block) {
-        return (block.interval != 0 && time % block.interval == 0) || time == -1;
+        return time == 0 || (block.interval != 0 && time % block.interval == 0);
     };
 
     for (const auto& block : blocks | std::views::filter(updatable)) {
@@ -185,14 +189,6 @@ void setroot() {
     XCloseDisplay(dpy);
 }
 
-void pstdout() {
-    if (!status_has_changed())//Only write out if text has changed.
-        return;
-    fmt::printf("%s\n", format_status_bar());
-    fflush(stdout);
-}
-
-
 void statusloop() {
 #ifndef __OpenBSD__
     setupsignals();
@@ -202,28 +198,19 @@ void statusloop() {
     unsigned interval = -1;
 
     for (const auto & block : blocks) {
-        if (block.interval) {
+        if (block.interval > 0) {
             interval = gcd(block.interval, interval);
         }
     }
 
-    const struct timespec sleeptime = {interval, 0};
-    struct timespec tosleep = sleeptime;
-    getcmds(-1);
-    for (int i = 0; statusContinue;) {
-        // sleep for tosleep (should be a sleeptime of interval seconds) and put what was left if interrupted back into tosleep
-        const auto interrupted = nanosleep(&tosleep, &tosleep);
-        // if interrupted then just go sleep again for the remaining time
-        if (interrupted == -1) {
-            continue;
-        }
-        // if not interrupted then do the calling and writing
-        getcmds(i);
+    const auto sleep_duration = std::chrono::seconds(interval);
+
+    for (std::uint64_t elapsed = 0; statusContinue;) {
+        getcmds(elapsed);
         writestatus();
-        // then increment since its actually been a second (plus the time it took the commands to run)
-        i += static_cast<int>(interval);
-        // set the time to sleep back to the sleeptime of 1s
-        tosleep = sleeptime;
+
+        std::this_thread::sleep_for(sleep_duration);
+        elapsed += sleep_duration.count();
     }
 }
 
@@ -265,19 +252,28 @@ void buttonhandler(int sig, siginfo_t *si, void *ucontext) {
 
 #endif
 
-void termhandler(int signum) {
-    (void)signum;
-    statusContinue = 0;
-    exit(0);
-}
-
 int main(int argc, char **argv) {
     for (int i = 0; i < argc; i++) {
-        if (!strcmp("-d", argv[i]))
+        if (!strcmp("-d", argv[i])) {
             delimiter = argv[++i];
-        else if (!strcmp("-p", argv[i]))
-            writestatus = pstdout;
+        }
+        else if (!strcmp("-p", argv[i])) {
+            // print to stdout
+            writestatus = []() {
+                if (!status_has_changed())
+                    return;
+                fmt::printf("%s\n", format_status_bar());
+                fflush(stdout);
+            };
+        }
     }
+
+    const auto termhandler = [](int signum) {
+        (void)signum;
+        statusContinue = 0;
+        exit(0);
+    };
+
     signal(SIGTERM, termhandler);
     signal(SIGINT, termhandler);
     statusloop();

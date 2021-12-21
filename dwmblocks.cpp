@@ -43,11 +43,8 @@ void statusloop();
 
 #include "config.h"
 
-Display *dpy = nullptr;
-int screen = 0;
-Window root;
 static std::array<std::string, blocks.size()> statusbar;
-std::atomic<int> statusContinue = 1;
+std::atomic<bool> statusContinue(true);
 unsigned changed_blocks = 0;
 
 static void (*writestatus)() = setroot;
@@ -87,7 +84,7 @@ void write_cmd_output(const Block& block, std::string &output) {
         do {
             errno = 0;
             tmpstr[0] = '\0';
-            status = fgets(tmpstr, CMDLENGTH - (delimiter.length() + 1), cmdf);
+            status = fgets(tmpstr, CMDLENGTH - static_cast<int>(delimiter.length() + 1), cmdf);
         } while (!status && errno == EINTR);
         pclose(cmdf);
 
@@ -98,8 +95,10 @@ void write_cmd_output(const Block& block, std::string &output) {
         return {tmpstr};
     };
 
-    if (const auto value = get_value_from_cmd(block.command)) {
+    if (auto value = get_value_from_cmd(block.command)) {
         output.clear();
+
+        strip_newlines(value.value());
 
         if (block.signal != 0) {
             output += static_cast<char>(block.signal);
@@ -107,8 +106,6 @@ void write_cmd_output(const Block& block, std::string &output) {
 
         output += block.icon;
         output += value.value();
-
-        strip_newlines(output);
 
         if (output.length() > 0 && &block != &blocks.back()) {
             output += delimiter;
@@ -123,7 +120,7 @@ void getcmds(std::uint64_t time = 0) {
 
     for (const auto& block : blocks | std::views::filter(updatable)) {
         const auto bar_index = std::distance(blocks.cbegin(), &block);
-        set_as_changed(bar_index);
+        set_as_changed(static_cast<unsigned>(bar_index));
         write_cmd_output(block, statusbar[bar_index]);
     }
 }
@@ -135,7 +132,7 @@ void getsigcmds(int signal) {
         if (static_cast<int>(block.signal) == signal) {
             write_cmd_output(block, statusbar[i]);
         }
-        i++;
+        ++i;
     }
 }
 
@@ -143,7 +140,14 @@ void setupsignals() {
     for (int i = SIGRTMIN; i <= SIGRTMAX; i++)
         signal(i, SIG_IGN);
 
-    struct sigaction sa{};
+    struct sigaction sa{
+            {nullptr},
+            {},
+            SA_SIGINFO,
+          {}
+    };
+
+    sa.sa_sigaction = buttonhandler;
 
     for (const auto& block : blocks) {
         if (block.signal > 0) {
@@ -151,12 +155,10 @@ void setupsignals() {
             sigaddset(&sa.sa_mask, SIGRTMIN + block.signal);
         }
     }
-    
-    sa.sa_sigaction = buttonhandler;
-    sa.sa_flags = SA_SIGINFO;
+
     sigaction(SIGUSR1, &sa, nullptr);
     
-    struct sigaction sigchld_action = {
+    constexpr struct sigaction sigchld_action = {
             {SIG_DFL},
             {},
             SA_NOCLDWAIT,
@@ -181,12 +183,14 @@ void setroot() {
         return;
 
     if (auto *d = XOpenDisplay(nullptr)) {
-        dpy = d;
+        static auto screen = DefaultScreen(d);
+        static auto root = RootWindow(d, screen);
+        XStoreName(d, root, format_status_bar().c_str());
+        XCloseDisplay(d);
+    } else {
+        fmt::fprintf(stderr, "Unable to get display");
+        exit(EXIT_FAILURE);
     }
-    screen = DefaultScreen(dpy);
-    root = RootWindow(dpy, screen);
-    XStoreName(dpy, root, format_status_bar().c_str());
-    XCloseDisplay(dpy);
 }
 
 void statusloop() {
@@ -195,15 +199,17 @@ void statusloop() {
 #endif
     // first figure out the default wait interval by finding the
     // greatest common denominator of the intervals
-    unsigned interval = -1;
-
-    for (const auto & block : blocks) {
-        if (block.interval > 0) {
-            interval = gcd(block.interval, interval);
+    constexpr unsigned interval = []() {
+        unsigned interval = -1;
+        for (const auto & block : blocks) {
+            if (block.interval > 0) {
+                interval = gcd(block.interval, interval);
+            }
         }
-    }
+        return interval;
+    }();
 
-    const auto sleep_duration = std::chrono::seconds(interval);
+    constexpr auto sleep_duration = std::chrono::seconds(interval);
 
     for (std::uint64_t elapsed = 0; statusContinue;) {
         getcmds(elapsed);
@@ -224,7 +230,6 @@ void sighandler(int signum) {
 void buttonhandler(int sig, siginfo_t *si, void *ucontext) {
     (void)ucontext;
 
-    char button[] = {static_cast<char>(('0' + si->si_value.sival_int) & 0xff), '\0'};
     const auto process_id = getpid();
     sig = si->si_value.sival_int >> 8;
 
@@ -241,11 +246,12 @@ void buttonhandler(int sig, siginfo_t *si, void *ucontext) {
         }
 
         const auto shcmd = fmt::sprintf("%s && kill -%d %d", current->command, current->signal + 34, process_id);
+        const char *const command[1024] = {"/bin/sh", "-c", shcmd.c_str(), nullptr};
+        const char button[] = {static_cast<char>('0' + (si->si_value.sival_int & 0xff)), '\0'};
 
-        const char * const command[1024] = {"/bin/sh", "-c", &shcmd[0], nullptr};
-        setenv("BLOCK_BUTTON", button, 1);
         setsid();
-        execvp(command[0], const_cast<char* const *>(command)); // fixme: I don't know how to deal with C APIs
+        setenv("BLOCK_BUTTON", button, 1);
+        execvp(command[0], const_cast<char *const *>(command)); // fixme: I don't know how to deal with C APIs
         exit(EXIT_SUCCESS);
     }
 }
@@ -253,6 +259,8 @@ void buttonhandler(int sig, siginfo_t *si, void *ucontext) {
 #endif
 
 int main(int argc, char **argv) {
+    static_assert(blocks.size() <= 32, "Too many blocks!");
+
     for (int i = 0; i < argc; i++) {
         if (!strcmp("-d", argv[i])) {
             delimiter = argv[++i];
@@ -268,10 +276,10 @@ int main(int argc, char **argv) {
         }
     }
 
-    const auto termhandler = [](int signum) {
+    auto termhandler = [](int signum) {
         (void)signum;
-        statusContinue = 0;
-        exit(0);
+        statusContinue = false;
+        exit(EXIT_SUCCESS);
     };
 
     signal(SIGTERM, termhandler);

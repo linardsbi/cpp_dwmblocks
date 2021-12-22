@@ -65,34 +65,27 @@ constexpr auto gcd(auto a, auto b) {
 }
 
 void write_cmd_output(const Block& block, std::string &output) {
-    auto get_value_from_cmd = [](const char* cmd)-> std::optional<std::string> {
-        FILE *cmdf = popen(cmd, "r");
-        if (!cmdf) {
-            //printf("failed to run: %s, %d\n", block.command, errno);
-            return {};
+    auto get_value_from_cmd = [](const char *cmd)-> std::optional<std::string> {
+
+        if (FILE *cmdf = popen(cmd, "r")) {
+            char *status;
+            char tmpstr[CMDLENGTH]{};
+            do {
+                errno = 0;
+                tmpstr[0] = '\0';
+                status = fgets(tmpstr, CMDLENGTH - static_cast<int>(delimiter.length() + 1), cmdf);
+            } while (!status && errno == EINTR);
+            pclose(cmdf);
+
+            if (tmpstr[0] < ' ' && tmpstr[0] > 0) {
+                return {};
+            }
+
+            return {tmpstr};
         }
 
-        // TODO decide whether its better to use the last value till next time or just keep trying while the error was the interrupt
-        // this keeps trying to read if it got nothing and the error was an interrupt
-        //  could also just read to a separate buffer and not move the data over if interrupted
-        //  this way will take longer trying to complete 1 thing but will get it done
-        //  the other way will move on to keep going with everything and the part that failed to read will be wrong till its updated again
-        // either way you have to save the data to a temp buffer because when it fails it writes nothing and then then it gets displayed before this finishes
-
-        char* status;
-        char tmpstr[CMDLENGTH]{};
-        do {
-            errno = 0;
-            tmpstr[0] = '\0';
-            status = fgets(tmpstr, CMDLENGTH - static_cast<int>(delimiter.length() + 1), cmdf);
-        } while (!status && errno == EINTR);
-        pclose(cmdf);
-
-        if (tmpstr[0] == '\0') {
-            return {};
-        }
-
-        return {tmpstr};
+        //printf("failed to run: %s, %d\n", block.command, errno);
+        return {};
     };
 
     if (auto value = get_value_from_cmd(block.command)) {
@@ -113,13 +106,14 @@ void write_cmd_output(const Block& block, std::string &output) {
     }
 }
 
+
 void getcmds(std::uint64_t time = 0) {
     auto updatable = [time](const auto &block) {
         return time == 0 || (block.interval != 0 && time % block.interval == 0);
     };
 
     for (const auto& block : blocks | std::views::filter(updatable)) {
-        const auto bar_index = std::distance(blocks.cbegin(), &block);
+        const auto bar_index = static_cast<std::size_t>(std::distance(blocks.cbegin(), &block));
         set_as_changed(static_cast<unsigned>(bar_index));
         write_cmd_output(block, statusbar[bar_index]);
     }
@@ -128,11 +122,14 @@ void getcmds(std::uint64_t time = 0) {
 #ifndef __OpenBSD__
 
 void getsigcmds(int signal) {
-    for (std::size_t i = 0; const auto& block : blocks) {
-        if (static_cast<int>(block.signal) == signal) {
-            write_cmd_output(block, statusbar[i]);
-        }
-        ++i;
+    const auto block = std::ranges::find_if(blocks, [signal](const auto &block) {
+        return static_cast<int>(block.signal) == signal;
+    });
+
+    if (block != blocks.end()) {
+        const auto bar_index = static_cast<std::size_t>(std::distance(blocks.cbegin(), block));
+        set_as_changed(static_cast<unsigned>(bar_index));
+        write_cmd_output(*block, statusbar[bar_index]);
     }
 }
 
@@ -169,11 +166,11 @@ void setupsignals() {
 
 #endif
 
-inline bool status_has_changed() {
+inline auto status_has_changed() {
     return changed_blocks > 0;
 }
 
-inline std::string format_status_bar() {
+inline auto format_status_bar() {
     changed_blocks = 0;
     return fmt::format("{}", fmt::join(statusbar, ""));
 }
@@ -233,7 +230,7 @@ void buttonhandler(int sig, siginfo_t *si, void *ucontext) {
     const auto process_id = getpid();
     sig = si->si_value.sival_int >> 8;
 
-    const auto is_current_sig = [sig](const auto& block) {
+    auto is_current_sig = [sig](const auto& block) {
         return static_cast<int>(block.signal) == sig;
     };
 
@@ -246,7 +243,7 @@ void buttonhandler(int sig, siginfo_t *si, void *ucontext) {
         }
 
         const auto shcmd = fmt::sprintf("%s && kill -%d %d", current->command, current->signal + 34, process_id);
-        const char *const command[1024] = {"/bin/sh", "-c", shcmd.c_str(), nullptr};
+        const char *const command[512] = {"/bin/sh", "-c", shcmd.c_str(), nullptr};
         const char button[] = {static_cast<char>('0' + (si->si_value.sival_int & 0xff)), '\0'};
 
         setsid();
@@ -262,10 +259,10 @@ int main(int argc, char **argv) {
     static_assert(blocks.size() <= 32, "Too many blocks!");
 
     for (int i = 0; i < argc; i++) {
-        if (!strcmp("-d", argv[i])) {
+        std::string_view arg = argv[i];
+        if (arg == "-d") {
             delimiter = argv[++i];
-        }
-        else if (!strcmp("-p", argv[i])) {
+        } else if (arg == "-p") {
             // print to stdout
             writestatus = []() {
                 if (!status_has_changed())

@@ -8,13 +8,8 @@ static constexpr std::array blocks = {
 //        Block{"", "sb-tasks", 10, 26},
         Block{"", "sb-music", 0, 11},
         Block{"", "sb-pacpackages", 0, 8},
-//	Block{"",	"sb-news",		0,	6},
-        /* Block{"",	"sb-price lbc \"LBRY Token\" 📚",			9000,	22}, */
-        /* Block{"",	"sb-price bat \"Basic Attention Token\" 🦁",	9000,	20}, */
-        /* Block{"",	"sb-price link \"Chainlink\" 🔗",			300,	25}, */
-        /* Block{"",	"sb-price xmr \"Monero\" 🔒",			9000,	24}, */
-        /* Block{"",	"sb-price eth Ethereum 🍸",	9000,	23}, */
-        Block{"",	"sb-price ftm \"Fantom\" ftm",				9000,	21},
+        Block{"", "sb-price btc Bitcoin 'BTC '", 3600, 23},
+        Block{"", "sb-price ftm \"Fantom\" 'FTM '", 3600, 21},
 //        Block{"", "sb-torrent", 20, 7},
         Block{"", "sb-memory", 10, 14},
         Block{"", "sb-cpu", 10, 18},
@@ -23,10 +18,10 @@ static constexpr std::array blocks = {
 //	Block{"",	"sb-mailbox",	180,	12},
         Block{"", "sb-nettraf", 1, 16},
         Block{"", "sb-volume", 0, 10},
-        Block{"", "sb-battery", 5, 3},
+//        Block{"", "sb-battery", 5, 3},
         Block{"", "sb-clock", 20, 1},
         Block{"", "sb-internet", 5, 4},
-        Block{"", "sb-help-icon", 0, 15},
+//        Block{"", "sb-help-icon", 0, 15},
 };
 
 //Sets delimiter between status commands. NULL character ('\0') means no delimiter.
